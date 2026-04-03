@@ -161,3 +161,8 @@ Thumbs.db
 /blob-report/
 /playwright/.cache/
 trace.zip
+
+# Projeto
+/debug/
+evolucoes.txt
+captura.txt

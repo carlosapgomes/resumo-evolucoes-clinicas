@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+
+{% block title %}Resumo de Evoluções Clínicas · Nova consulta{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-12 col-lg-10 col-xl-8">
+    <div class="card shadow-sm border-0">
+      <div class="card-body p-4 p-md-5">
+        <div class="mb-4">
+          <p class="text-uppercase text-secondary small fw-semibold mb-2">MVP interno</p>
+          <h1 class="display-6 fw-semibold mb-3">Resumo de Evoluções Clínicas</h1>
+          <p class="lead mb-0">
+            Consulta as evoluções do paciente no AGHUse e gera um resumo automatizado para apoio à leitura.
+          </p>
+        </div>
+
+        <div class="alert alert-danger d-none" id="form-alert" role="alert"></div>
+
+        <form id="work-form" class="row g-3">
+          <div class="col-12">
+            <label for="patient_record" class="form-label fw-semibold">Registro do paciente</label>
+            <input
+              type="text"
+              class="form-control form-control-lg"
+              id="patient_record"
+              name="patient_record"
+              placeholder="Ex.: 123456"
+              autocomplete="off"
+              required
+            >
+          </div>
+          <div class="col-12 d-grid d-sm-flex gap-2">
+            <button type="submit" class="btn btn-primary btn-lg px-4" id="submit-button">
+              Pesquisar e resumir
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
