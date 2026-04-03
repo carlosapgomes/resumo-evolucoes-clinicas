@@ -1,11 +1,15 @@
 import os
+from typing import Callable
 from dotenv import load_dotenv
-from playwright.sync_api import Playwright, sync_playwright, expect
+from playwright.sync_api import Locator, Page, Playwright, sync_playwright, expect
 
 load_dotenv()
 
 DEFAULT_TIMEOUT_MS = 180000
 UI_TIMEOUT_MS = 60000
+NETWORKIDLE_TIMEOUT_MS = 30000
+RETRY_INTERVAL_MS = 3000
+RETRY_ATTEMPTS = 3
 
 
 def required_env(name: str) -> str:
@@ -15,7 +19,46 @@ def required_env(name: str) -> str:
     return value
 
 
-def fechar_dialogos_iniciais(page) -> None:
+def aguardar_pagina_estavel(page: Page) -> None:
+    page.wait_for_load_state("domcontentloaded", timeout=DEFAULT_TIMEOUT_MS)
+
+    try:
+        page.wait_for_load_state("networkidle", timeout=NETWORKIDLE_TIMEOUT_MS)
+    except Exception:
+        print("Aviso: networkidle não foi atingido dentro do tempo limite; seguindo com a automação.")
+
+
+
+def esperar_locator_com_retry(
+    page: Page,
+    descricao: str,
+    locator_factory: Callable[[], Locator],
+    *,
+    timeout: int = UI_TIMEOUT_MS,
+    tentativas: int = RETRY_ATTEMPTS,
+) -> Locator:
+    ultimo_erro = None
+
+    for tentativa in range(1, tentativas + 1):
+        locator = locator_factory()
+
+        try:
+            expect(locator).to_be_visible(timeout=timeout)
+            return locator
+        except Exception as erro:
+            ultimo_erro = erro
+            if tentativa == tentativas:
+                break
+
+            print(f"Tentativa {tentativa}/{tentativas} falhou ao localizar {descricao}. Tentando novamente...")
+            page.wait_for_timeout(RETRY_INTERVAL_MS)
+            aguardar_pagina_estavel(page)
+
+    raise ultimo_erro
+
+
+
+def fechar_dialogos_iniciais(page: Page) -> None:
     pendencias_modal = page.locator("#central_pendencias")
 
     try:
@@ -69,28 +112,48 @@ def run(playwright: Playwright) -> None:
     page.get_by_role("textbox", name="Senha").fill(user_pw)
     page.get_by_role("button", name="Entrar").click()
 
-    page.wait_for_load_state("domcontentloaded")
+    aguardar_pagina_estavel(page)
 
     fechar_dialogos_iniciais(page)
 
-    botao_internacao_atual = page.locator("#_icon_img_404335")
-    expect(botao_internacao_atual).to_be_visible(timeout=UI_TIMEOUT_MS)
+    botao_internacao_atual = esperar_locator_com_retry(
+        page,
+        "botão de Internação Atual",
+        lambda: page.locator("#_icon_img_404335"),
+    )
     botao_internacao_atual.click()
+    aguardar_pagina_estavel(page)
 
     frame_internacao = page.frame_locator('iframe[name="i_frame_internação_atual"]')
 
-    campo_registro = frame_internacao.locator('[id="prontuario:prontuario:inputId"]')
-    expect(campo_registro).to_be_visible(timeout=UI_TIMEOUT_MS)
+    campo_registro = esperar_locator_com_retry(
+        page,
+        "campo de registro no iframe de internação",
+        lambda: frame_internacao.locator('[id="prontuario:prontuario:inputId"]'),
+    )
     campo_registro.click()
     campo_registro.fill(patient_rec_number)
 
-    seletor_categoria = frame_internacao.locator('[id="categoriaProfissional:categoriaProfissional:inputId"] span')
-    expect(seletor_categoria).to_be_visible(timeout=UI_TIMEOUT_MS)
+    seletor_categoria = esperar_locator_com_retry(
+        page,
+        "seletor de categoria profissional no iframe de internação",
+        lambda: frame_internacao.locator('[id="categoriaProfissional:categoriaProfissional:inputId"] span'),
+    )
     seletor_categoria.click()
-    frame_internacao.get_by_role("option", name="Médico", exact=True).click()
 
-    texto_paciente = frame_internacao.locator("#j_idt175")
-    expect(texto_paciente).to_be_visible(timeout=UI_TIMEOUT_MS)
+    opcao_medico = esperar_locator_com_retry(
+        page,
+        "opção Médico no seletor de categoria profissional",
+        lambda: frame_internacao.get_by_role("option", name="Médico", exact=True),
+    )
+    opcao_medico.click()
+    aguardar_pagina_estavel(page)
+
+    texto_paciente = esperar_locator_com_retry(
+        page,
+        "texto do paciente (#j_idt175) no iframe de internação",
+        lambda: frame_internacao.locator("#j_idt175"),
+    )
     conteudo_texto = (texto_paciente.text_content() or "").strip()
     print(f"Conteúdo de #j_idt175: {conteudo_texto}")
 
