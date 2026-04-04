@@ -6,7 +6,7 @@ from threading import Thread
 
 from flask import Flask, abort, jsonify, render_template, request
 
-from aghu import CaptureResult, capture_evolution_data
+from source_system import CaptureResult, capture_evolution_data
 from config import load_settings
 from llm import SummaryGenerationError, SummaryTimeoutError, generate_summary
 from work_manager import WorkInProgressError, WorkManager
@@ -140,7 +140,7 @@ def run_work(
         work_manager.update_work(
             work_id,
             phase="starting",
-            message="Preparando automação no AGHUse...",
+            message="Preparando consulta no sistema fonte...",
         )
         capture_result = capture_evolution_data(
             patient_record,
@@ -149,11 +149,11 @@ def run_work(
             progress_callback=report,
         )
     except Exception as error:
-        print(f"Erro na etapa de captura do AGHUse para o work {work_id}:")
+        print(f"Erro na etapa de consulta ao sistema fonte para o work {work_id}:")
         print(traceback.format_exc())
         work_manager.fail_work(
             work_id,
-            message="Não foi possível capturar e processar as evoluções no AGHUse.",
+            message="Não foi possível consultar e processar as evoluções no sistema fonte.",
             error=_friendly_capture_error_message(error),
             patient_summary=capture_result.patient_summary if capture_result else None,
             raw_text=capture_result.raw_text if capture_result else None,
@@ -262,7 +262,7 @@ def _friendly_capture_error_message(error: Exception) -> str:
 
     lowered = message.lower()
     if "timeout" in lowered or "timed out" in lowered:
-        return "A captura das evoluções no AGHUse excedeu o tempo limite."
+        return "A consulta das evoluções no sistema fonte excedeu o tempo limite."
 
     return message
 

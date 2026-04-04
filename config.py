@@ -10,9 +10,9 @@ load_dotenv()
 
 @dataclass(frozen=True)
 class Settings:
-    aghuse_url: str | None
-    user_name: str | None
-    user_pw: str | None
+    source_system_url: str | None
+    source_system_username: str | None
+    source_system_password: str | None
     llm_base_url: str
     llm_api_key: str
     llm_model: str = "default"
@@ -40,19 +40,19 @@ def load_settings() -> Settings:
     llm_timeout_seconds = float(os.getenv("LLM_TIMEOUT_SECONDS", "120"))
     evolution_fixture_path_value = os.getenv("EVOLUTION_FIXTURE_PATH")
 
-    aghuse_url = os.getenv("AGHUSE_URL")
-    user_name = os.getenv("USER_NAME")
-    user_pw = os.getenv("USER_PW")
+    source_system_url = os.getenv("SOURCE_SYSTEM_URL")
+    source_system_username = os.getenv("SOURCE_SYSTEM_USERNAME")
+    source_system_password = os.getenv("SOURCE_SYSTEM_PASSWORD")
 
     if not evolution_fixture_path_value:
-        aghuse_url = required_env("AGHUSE_URL")
-        user_name = required_env("USER_NAME")
-        user_pw = required_env("USER_PW")
+        source_system_url = required_env("SOURCE_SYSTEM_URL")
+        source_system_username = required_env("SOURCE_SYSTEM_USERNAME")
+        source_system_password = required_env("SOURCE_SYSTEM_PASSWORD")
 
     return Settings(
-        aghuse_url=aghuse_url,
-        user_name=user_name,
-        user_pw=user_pw,
+        source_system_url=source_system_url,
+        source_system_username=source_system_username,
+        source_system_password=source_system_password,
         llm_base_url=required_env("LLM_BASE_URL"),
         llm_api_key=required_env("LLM_API_KEY"),
         llm_model=os.getenv("LLM_MODEL", "default"),

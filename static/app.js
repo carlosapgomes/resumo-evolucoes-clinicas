@@ -7,7 +7,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
 const PHASE_CONFIG = {
   starting: { label: "Preparando", progress: 8 },
-  logging_in: { label: "Autenticando no AGHUse", progress: 15 },
+  logging_in: { label: "Autenticando no sistema fonte", progress: 15 },
   opening_internacao: { label: "Abrindo Internação Atual", progress: 24 },
   filling_patient_record: { label: "Preenchendo registro do paciente", progress: 34 },
   selecting_professional_category: { label: "Selecionando categoria profissional", progress: 42 },

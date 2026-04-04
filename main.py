@@ -2,12 +2,12 @@ import argparse
 import os
 from datetime import date, timedelta
 
-from aghu import capture_evolution_data
+from source_system import capture_evolution_data
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Executa a captura das evoluções por intervalo de datas no AGHUse para um registro de paciente."
+        description="Executa a captura das evoluções por intervalo de datas no sistema fonte para um registro de paciente."
     )
     parser.add_argument(
         "patient_record",
@@ -37,8 +37,8 @@ def main() -> None:
             "Informe o registro do paciente via argumento ou defina PATIENT_REC_NUMBER no .env."
         )
 
-    interval_start_datetime = _iso_to_aghu_datetime(args.start_date, suffix="00:01")
-    interval_end_datetime = _iso_to_aghu_datetime(args.end_date, suffix="23:59")
+    interval_start_datetime = _iso_to_source_datetime(args.start_date, suffix="00:01")
+    interval_end_datetime = _iso_to_source_datetime(args.end_date, suffix="23:59")
 
     result = capture_evolution_data(
         patient_record,
@@ -62,7 +62,7 @@ def _default_end_date() -> str:
     return date.today().isoformat()
 
 
-def _iso_to_aghu_datetime(value: str, *, suffix: str) -> str:
+def _iso_to_source_datetime(value: str, *, suffix: str) -> str:
     parsed = date.fromisoformat(value)
     return parsed.strftime("%d/%m/%Y") + f" {suffix}"
 

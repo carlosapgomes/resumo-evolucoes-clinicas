@@ -278,7 +278,7 @@ def capture_evolution_data(
         page = None
 
         try:
-            report("starting", "Preparando automação do AGHUse...")
+            report("starting", "Preparando consulta no sistema fonte...")
             browser = playwright.chromium.launch(
                 headless=False,
                 args=["--ignore-certificate-errors"],
@@ -288,12 +288,12 @@ def capture_evolution_data(
             page.set_default_timeout(DEFAULT_TIMEOUT_MS)
             page.set_default_navigation_timeout(DEFAULT_TIMEOUT_MS)
 
-            report("logging_in", "Abrindo a tela inicial do AGHUse...")
-            page.goto(settings.aghuse_url, timeout=DEFAULT_TIMEOUT_MS)
+            report("logging_in", "Abrindo a tela inicial do sistema fonte...")
+            page.goto(settings.source_system_url, timeout=DEFAULT_TIMEOUT_MS)
 
-            report("logging_in", "Autenticando no AGHUse...")
-            page.get_by_role("textbox", name="Nome de usuário").fill(settings.user_name)
-            page.get_by_role("textbox", name="Senha").fill(settings.user_pw)
+            report("logging_in", "Autenticando no sistema fonte...")
+            page.get_by_role("textbox", name="Nome de usuário").fill(settings.source_system_username)
+            page.get_by_role("textbox", name="Senha").fill(settings.source_system_password)
             page.get_by_role("button", name="Entrar").click()
             aguardar_pagina_estavel(page)
 
@@ -424,7 +424,7 @@ def capture_evolution_data_from_fixture(
         if progress_callback:
             progress_callback(phase, message)
 
-    report("starting", "Usando PDF fixture local em vez de acessar o AGHUse...")
+    report("starting", "Usando PDF fixture local em vez de acessar o sistema fonte...")
     report(
         "downloading_pdf",
         f"Copiando PDF fixture {fixture.name} para {settings.pdf_output_path}...",
