@@ -209,6 +209,5 @@ O endpoint de status pode passar por fases como:
 - `completed`
 - `error`
 
-## Observações
+## Observação
 - O fluxo antigo de captura direta do texto da tela foi substituído pelo fluxo de relatório em PDF por intervalo.
-- O diretório local pode continuar com o nome `pontelo`, mesmo com o produto e o repositório remoto já renomeados.
