@@ -1,23 +1,28 @@
 # Resumo de Evoluções Clínicas
 
-Aplicação web interna para consultar evoluções clínicas no AGHUse em um intervalo de datas, baixar o relatório em PDF, processar o texto e gerar um resumo clínico com apoio de LLM.
+Aplicação web interna para consultar evoluções clínicas em um sistema clínico de origem, baixar o relatório em PDF, processar o texto e gerar um resumo com apoio de um LLM configurável.
 
 ## Visão geral
 O MVP atual faz o seguinte:
 
 1. recebe o **registro do paciente**
 2. recebe **data inicial** e **data final**
-3. acessa o AGHUse
+3. consulta o sistema clínico de origem
 4. baixa o PDF do relatório de evoluções do período
 5. extrai o texto do PDF
 6. remove artefatos de paginação e identificação repetida
 7. reordena as evoluções cronologicamente
-8. envia o texto processado para a OpenAI
+8. envia ao endpoint de LLM apenas o texto processado necessário para o resumo
 9. exibe ao usuário:
    - período consultado
    - resumo do paciente capturado na tela
    - texto processado e ordenado
    - resumo gerado
+
+## Observação sobre integração com LLM
+A aplicação usa um **endpoint de LLM compatível com OpenAI** e configurável por variável de ambiente.
+
+O pipeline atual **não envia o número de registro como metadado adicional** ao endpoint de LLM. A implantação e o uso institucional devem observar as diretrizes locais de segurança, privacidade e governança de dados.
 
 ## Restrições do MVP
 - sem login próprio da aplicação
@@ -32,12 +37,12 @@ O MVP atual faz o seguinte:
 - **Frontend:** HTML + Bootstrap + JavaScript vanilla
 - **Automação:** Playwright
 - **Extração de PDF:** PyMuPDF
-- **LLM:** OpenAI
+- **LLM:** endpoint configurável compatível com OpenAI
 
 ## Estrutura principal do projeto
 ```text
 app.py
-aghu.py
+source_system.py
 config.py
 llm.py
 work_manager.py
@@ -64,13 +69,15 @@ Crie um arquivo `.env` com as variáveis adequadas.
 
 ### Modo normal
 ```env
-AGHUSE_URL=https://...
-USER_NAME=...
-USER_PW=...
-OPENAI_API_KEY=...
+SOURCE_SYSTEM_URL=https://...
+SOURCE_SYSTEM_USERNAME=...
+SOURCE_SYSTEM_PASSWORD=...
 
-OPENAI_MODEL=gpt-5
-OPENAI_TIMEOUT_SECONDS=120
+LLM_BASE_URL=https://...
+LLM_API_KEY=...
+LLM_MODEL=default
+LLM_TIMEOUT_SECONDS=120
+
 FLASK_HOST=0.0.0.0
 FLASK_PORT=8000
 ```
@@ -87,19 +94,20 @@ PDF_DEBUG_HTML_PATH=downloads/evolucoes-intervalo.debug.html
 ```
 
 ### Modo fixture local
-Nesse modo, `EVOLUTION_FIXTURE_PATH` deve apontar para um **PDF bruto** já baixado do sistema.
+Nesse modo, `EVOLUTION_FIXTURE_PATH` deve apontar para um **PDF bruto** já disponível localmente.
 
 ```env
-OPENAI_API_KEY=...
-OPENAI_MODEL=gpt-5
-OPENAI_TIMEOUT_SECONDS=120
+LLM_BASE_URL=https://...
+LLM_API_KEY=...
+LLM_MODEL=default
+LLM_TIMEOUT_SECONDS=120
 FLASK_HOST=0.0.0.0
 FLASK_PORT=8000
 EVOLUTION_FIXTURE_PATH=./meu-relatorio.pdf
 ```
 
 Quando `EVOLUTION_FIXTURE_PATH` está presente:
-- o sistema **não acessa o AGHUse**
+- o sistema **não acessa o sistema clínico de origem**
 - usa o PDF local como entrada
 - extrai, processa, ordena e resume normalmente
 
@@ -133,7 +141,7 @@ Na página inicial, informe:
 
 A interface usa datepicker nativo do navegador.
 
-O backend normaliza o período para o formato esperado pelo AGHUse:
+O backend normaliza o período para o formato esperado pelo sistema fonte:
 - data inicial → `DD/MM/YYYY 00:01`
 - data final → `DD/MM/YYYY 23:59`
 
@@ -142,14 +150,14 @@ Se a data final vier no futuro, ela é ajustada para a data atual.
 ## Pipeline interno
 O fluxo atual do backend é:
 
-1. autenticar no AGHUse
-2. abrir **Internação Atual**
+1. autenticar no sistema fonte
+2. abrir a tela clínica de consulta do paciente
 3. preencher o registro do paciente
-4. selecionar categoria profissional `Médico`
+4. selecionar a categoria profissional necessária
 5. capturar o resumo do paciente na tela
-6. abrir `Visualizar Tudo`
+6. abrir a consulta por intervalo
 7. preencher o intervalo de datas
-8. clicar em `Visualizar`
+8. solicitar a visualização do relatório
 9. localizar o `<object type="application/pdf">`
 10. ler a URL do PDF no atributo `data`
 11. baixar o PDF autenticado

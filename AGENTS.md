@@ -8,12 +8,18 @@
 ## Objetivo do MVP
 Aplicação web interna que:
 1. recebe o registro do paciente e um intervalo de datas
-2. consulta o AGHUse
+2. consulta o sistema clínico de origem
 3. baixa o PDF de evoluções do período
 4. extrai e limpa o texto
 5. reordena as evoluções cronologicamente
-6. envia o texto processado para um LLM da OpenAI
+6. envia o texto processado para um endpoint de LLM compatível com OpenAI
 7. mostra texto processado + resumo gerado
+
+## Diretrizes de linguagem e exposição
+- evitar mencionar nomes específicos de sistemas hospitalares nas docs, UI e mensagens públicas do projeto
+- evitar mencionar fornecedores específicos de LLM nas docs, UI e mensagens públicas do projeto
+- preferir os termos **sistema fonte**, **sistema clínico de origem**, **LLM** e **endpoint compatível com OpenAI**
+- não reintroduzir referências nominais a provedores ou sistemas específicos sem necessidade institucional explícita
 
 ## Restrições atuais do MVP
 - manter simplicidade
@@ -31,7 +37,7 @@ Na página inicial, o usuário informa:
 - `start_date`
 - `end_date`
 
-As datas entram pela UI como `YYYY-MM-DD` e o backend normaliza para o formato usado no AGHUse:
+As datas entram pela UI como `YYYY-MM-DD` e o backend normaliza para o formato usado no sistema fonte:
 - início: `DD/MM/YYYY 00:01`
 - fim: `DD/MM/YYYY 23:59`
 
@@ -39,12 +45,12 @@ Se a data final vier no futuro, o backend normaliza para a data atual.
 
 ## Pipeline principal
 O backend usa o fluxo baseado em PDF por intervalo de datas:
-1. login no AGHUse
-2. abertura de **Internação Atual**
+1. autenticação no sistema fonte
+2. abertura da tela clínica de consulta
 3. seleção do paciente
-4. seleção da categoria `Médico`
+4. seleção da categoria profissional necessária
 5. captura de `patient_summary` na tela
-6. abertura de `Visualizar Tudo`
+6. abertura da consulta por intervalo
 7. preenchimento do intervalo
 8. geração do relatório
 9. leitura da URL do PDF em `<object type="application/pdf">`
@@ -52,7 +58,13 @@ O backend usa o fluxo baseado em PDF por intervalo de datas:
 11. extração de texto com `PyMuPDF`
 12. limpeza do TXT extraído
 13. reordenação cronológica das evoluções
-14. resumo com OpenAI
+14. resumo com endpoint de LLM configurado
+
+## Diretriz sobre LLM e dados adicionais
+- o pipeline atual não deve enviar o número de registro como metadado adicional ao endpoint de LLM
+- ao alterar a integração com LLM, evitar incluir identificadores adicionais desnecessários no payload
+- evitar textos em documentação que afirmem garantias de desidentificação que o código não implementa explicitamente
+- qualquer implantação institucional deve observar regras locais de segurança, privacidade e governança de dados
 
 ## Fonte de verdade para o LLM e para a UI
 O texto exibido ao usuário e enviado ao modelo deve ser sempre o arquivo/texto:
@@ -65,9 +77,9 @@ Na prática, isso corresponde ao conteúdo de `downloads/evolucoes-intervalo-ord
 ## Arquivos principais
 ### Backend
 - `app.py` — rotas Flask e orquestração do work
-- `aghu.py` — automação do AGHUse, download do PDF e integração do pipeline
+- `source_system.py` — automação do sistema fonte, download do PDF e integração do pipeline
 - `config.py` — leitura de variáveis de ambiente e paths
-- `llm.py` — integração com OpenAI
+- `llm.py` — integração com endpoint de LLM compatível com OpenAI
 - `work_manager.py` — estado em memória do processamento
 - `processa_evolucoes_txt.py` — limpeza e reordenação cronológica do texto extraído
 
@@ -98,12 +110,12 @@ Esses arquivos são úteis para depuração e podem ser sobrescritos a cada exec
 A variável `EVOLUTION_FIXTURE_PATH` aponta para um **PDF bruto**.
 
 Nesse modo:
-- o sistema não acessa o AGHUse
+- o sistema não acessa o sistema fonte
 - copia o PDF fixture para o path de saída
 - extrai o texto
 - processa
 - reordena
-- envia o texto ao LLM normalmente
+- envia o texto ao endpoint de LLM normalmente
 
 ## Estados esperados do processamento
 Fases atualmente previstas no endpoint de status:
