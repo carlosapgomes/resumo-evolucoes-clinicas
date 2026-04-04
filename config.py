@@ -13,9 +13,10 @@ class Settings:
     aghuse_url: str | None
     user_name: str | None
     user_pw: str | None
-    openai_api_key: str
-    openai_model: str = "gpt-5"
-    openai_timeout_seconds: float = 120.0
+    llm_base_url: str
+    llm_api_key: str
+    llm_model: str = "default"
+    llm_timeout_seconds: float = 120.0
     flask_host: str = "0.0.0.0"
     flask_port: int = 8000
     evolution_fixture_path: Path | None = None
@@ -36,7 +37,7 @@ def required_env(name: str) -> str:
 @lru_cache(maxsize=1)
 def load_settings() -> Settings:
     flask_port = int(os.getenv("FLASK_PORT", "8000"))
-    openai_timeout_seconds = float(os.getenv("OPENAI_TIMEOUT_SECONDS", "120"))
+    llm_timeout_seconds = float(os.getenv("LLM_TIMEOUT_SECONDS", "120"))
     evolution_fixture_path_value = os.getenv("EVOLUTION_FIXTURE_PATH")
 
     aghuse_url = os.getenv("AGHUSE_URL")
@@ -52,9 +53,10 @@ def load_settings() -> Settings:
         aghuse_url=aghuse_url,
         user_name=user_name,
         user_pw=user_pw,
-        openai_api_key=required_env("OPENAI_API_KEY"),
-        openai_model=os.getenv("OPENAI_MODEL", "gpt-5"),
-        openai_timeout_seconds=openai_timeout_seconds,
+        llm_base_url=required_env("LLM_BASE_URL"),
+        llm_api_key=required_env("LLM_API_KEY"),
+        llm_model=os.getenv("LLM_MODEL", "default"),
+        llm_timeout_seconds=llm_timeout_seconds,
         flask_host=os.getenv("FLASK_HOST", "0.0.0.0"),
         flask_port=flask_port,
         evolution_fixture_path=Path(evolution_fixture_path_value) if evolution_fixture_path_value else None,
