@@ -19,11 +19,16 @@ class WorkNotFoundError(RuntimeError):
 class WorkState:
     id: str
     patient_record: str
+    start_date: str
+    end_date: str
+    interval_start_datetime: str
+    interval_end_datetime: str
     status: str
     phase: str
     message: str
     started_at: str
     finished_at: str | None = None
+    patient_summary: str | None = None
     raw_text: str | None = None
     summary: str | None = None
     error: str | None = None
@@ -37,7 +42,15 @@ class WorkManager:
         self._lock = Lock()
         self._current_work: WorkState | None = None
 
-    def start_work(self, patient_record: str) -> WorkState:
+    def start_work(
+        self,
+        patient_record: str,
+        *,
+        start_date: str,
+        end_date: str,
+        interval_start_datetime: str,
+        interval_end_datetime: str,
+    ) -> WorkState:
         with self._lock:
             if self._current_work and self._current_work.status == "running":
                 raise WorkInProgressError("Já existe um processamento em andamento.")
@@ -45,6 +58,10 @@ class WorkManager:
             work = WorkState(
                 id=uuid4().hex,
                 patient_record=patient_record,
+                start_date=start_date,
+                end_date=end_date,
+                interval_start_datetime=interval_start_datetime,
+                interval_end_datetime=interval_end_datetime,
                 status="running",
                 phase="starting",
                 message="Iniciando processamento...",
@@ -76,6 +93,7 @@ class WorkManager:
         status: str | None = None,
         phase: str | None = None,
         message: str | None = None,
+        patient_summary: str | None = None,
         raw_text: str | None = None,
         summary: str | None = None,
         error: str | None = None,
@@ -89,6 +107,8 @@ class WorkManager:
                 work.phase = phase
             if message is not None:
                 work.message = message
+            if patient_summary is not None:
+                work.patient_summary = patient_summary
             if raw_text is not None:
                 work.raw_text = raw_text
             if summary is not None:
@@ -98,12 +118,20 @@ class WorkManager:
 
             return _clone_work(work)
 
-    def complete_work(self, work_id: str, *, raw_text: str, summary: str) -> WorkState:
+    def complete_work(
+        self,
+        work_id: str,
+        *,
+        patient_summary: str | None,
+        raw_text: str,
+        summary: str,
+    ) -> WorkState:
         with self._lock:
             work = self._require_work(work_id)
             work.status = "completed"
             work.phase = "completed"
             work.message = "Resumo concluído."
+            work.patient_summary = patient_summary
             work.raw_text = raw_text
             work.summary = summary
             work.error = None
@@ -116,6 +144,7 @@ class WorkManager:
         *,
         message: str,
         error: str | None = None,
+        patient_summary: str | None = None,
         raw_text: str | None = None,
     ) -> WorkState:
         with self._lock:
@@ -124,6 +153,8 @@ class WorkManager:
             work.phase = "error"
             work.message = message
             work.error = error
+            if patient_summary is not None:
+                work.patient_summary = patient_summary
             if raw_text is not None:
                 work.raw_text = raw_text
             work.finished_at = _utcnow_iso()

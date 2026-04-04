@@ -1,6 +1,7 @@
 import os
 from dataclasses import dataclass
 from functools import lru_cache
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -17,7 +18,12 @@ class Settings:
     openai_timeout_seconds: float = 120.0
     flask_host: str = "0.0.0.0"
     flask_port: int = 8000
-    evolution_fixture_path: str | None = None
+    evolution_fixture_path: Path | None = None
+    pdf_output_path: Path = Path("downloads/evolucoes-intervalo.pdf")
+    txt_output_path: Path = Path("downloads/evolucoes-intervalo.txt")
+    processed_txt_output_path: Path = Path("downloads/evolucoes-intervalo-processado.txt")
+    sorted_txt_output_path: Path = Path("downloads/evolucoes-intervalo-ordenado.txt")
+    pdf_debug_html_path: Path = Path("downloads/evolucoes-intervalo.debug.html")
 
 
 def required_env(name: str) -> str:
@@ -31,13 +37,13 @@ def required_env(name: str) -> str:
 def load_settings() -> Settings:
     flask_port = int(os.getenv("FLASK_PORT", "8000"))
     openai_timeout_seconds = float(os.getenv("OPENAI_TIMEOUT_SECONDS", "120"))
-    evolution_fixture_path = os.getenv("EVOLUTION_FIXTURE_PATH")
+    evolution_fixture_path_value = os.getenv("EVOLUTION_FIXTURE_PATH")
 
     aghuse_url = os.getenv("AGHUSE_URL")
     user_name = os.getenv("USER_NAME")
     user_pw = os.getenv("USER_PW")
 
-    if not evolution_fixture_path:
+    if not evolution_fixture_path_value:
         aghuse_url = required_env("AGHUSE_URL")
         user_name = required_env("USER_NAME")
         user_pw = required_env("USER_PW")
@@ -51,5 +57,16 @@ def load_settings() -> Settings:
         openai_timeout_seconds=openai_timeout_seconds,
         flask_host=os.getenv("FLASK_HOST", "0.0.0.0"),
         flask_port=flask_port,
-        evolution_fixture_path=evolution_fixture_path,
+        evolution_fixture_path=Path(evolution_fixture_path_value) if evolution_fixture_path_value else None,
+        pdf_output_path=Path(os.getenv("PDF_OUTPUT_PATH", "downloads/evolucoes-intervalo.pdf")),
+        txt_output_path=Path(os.getenv("TXT_OUTPUT_PATH", "downloads/evolucoes-intervalo.txt")),
+        processed_txt_output_path=Path(
+            os.getenv("PROCESSED_TXT_OUTPUT_PATH", "downloads/evolucoes-intervalo-processado.txt")
+        ),
+        sorted_txt_output_path=Path(
+            os.getenv("SORTED_TXT_OUTPUT_PATH", "downloads/evolucoes-intervalo-ordenado.txt")
+        ),
+        pdf_debug_html_path=Path(
+            os.getenv("PDF_DEBUG_HTML_PATH", "downloads/evolucoes-intervalo.debug.html")
+        ),
     )

@@ -11,7 +11,7 @@
           <p class="text-uppercase text-secondary small fw-semibold mb-2">MVP interno</p>
           <h1 class="display-6 fw-semibold mb-3">Resumo de Evoluções Clínicas</h1>
           <p class="lead mb-0">
-            Consulta as evoluções do paciente no AGHUse e gera um resumo automatizado para apoio à leitura.
+            Consulta as evoluções do paciente em um intervalo de datas no AGHUse e gera um resumo automatizado para apoio à leitura.
           </p>
         </div>
 
@@ -30,6 +30,35 @@
               required
             >
           </div>
+
+          <div class="col-12 col-md-6">
+            <label for="start_date" class="form-label fw-semibold">Data inicial</label>
+            <input
+              type="date"
+              class="form-control form-control-lg"
+              id="start_date"
+              name="start_date"
+              required
+            >
+          </div>
+
+          <div class="col-12 col-md-6">
+            <label for="end_date" class="form-label fw-semibold">Data final</label>
+            <input
+              type="date"
+              class="form-control form-control-lg"
+              id="end_date"
+              name="end_date"
+              required
+            >
+          </div>
+
+          <div class="col-12">
+            <p class="text-secondary small mb-0">
+              O sistema usará o período informado e normalizará os horários para 00:01 na data inicial e 23:59 na data final.
+            </p>
+          </div>
+
           <div class="col-12 d-grid d-sm-flex gap-2">
             <button type="submit" class="btn btn-primary btn-lg px-4" id="submit-button">
               Pesquisar e resumir

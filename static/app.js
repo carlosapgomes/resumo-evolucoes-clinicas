@@ -1,8 +1,47 @@
 document.addEventListener("DOMContentLoaded", () => {
+  setupDateInputs();
   setupWorkForm();
   setupResultPage();
   setupCopySummaryButton();
 });
+
+const PHASE_CONFIG = {
+  starting: { label: "Preparando", progress: 8 },
+  logging_in: { label: "Autenticando no AGHUse", progress: 15 },
+  opening_internacao: { label: "Abrindo Internação Atual", progress: 24 },
+  filling_patient_record: { label: "Preenchendo registro do paciente", progress: 34 },
+  selecting_professional_category: { label: "Selecionando categoria profissional", progress: 42 },
+  capturing_patient_summary: { label: "Capturando resumo do paciente", progress: 50 },
+  opening_date_range: { label: "Abrindo consulta por intervalo", progress: 58 },
+  filling_date_range: { label: "Preenchendo intervalo de datas", progress: 66 },
+  requesting_report: { label: "Solicitando relatório", progress: 74 },
+  downloading_pdf: { label: "Baixando PDF", progress: 82 },
+  extracting_pdf_text: { label: "Extraindo texto do PDF", progress: 88 },
+  processing_text: { label: "Processando e ordenando evoluções", progress: 94 },
+  summarizing: { label: "Gerando resumo", progress: 98 },
+  completed: { label: "Concluído", progress: 100 },
+  error: { label: "Erro", progress: 100 },
+};
+
+function setupDateInputs() {
+  const startDateInput = document.getElementById("start_date");
+  const endDateInput = document.getElementById("end_date");
+  if (!startDateInput || !endDateInput) {
+    return;
+  }
+
+  const today = new Date();
+  const fiveDaysAgo = new Date(today);
+  fiveDaysAgo.setDate(today.getDate() - 5);
+
+  if (!endDateInput.value) {
+    endDateInput.value = formatDateForInput(today);
+  }
+
+  if (!startDateInput.value) {
+    startDateInput.value = formatDateForInput(fiveDaysAgo);
+  }
+}
 
 function setupWorkForm() {
   const form = document.getElementById("work-form");
@@ -13,16 +52,32 @@ function setupWorkForm() {
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
 
-    const input = document.getElementById("patient_record");
+    const patientRecordInput = document.getElementById("patient_record");
+    const startDateInput = document.getElementById("start_date");
+    const endDateInput = document.getElementById("end_date");
     const button = document.getElementById("submit-button");
     const alertBox = document.getElementById("form-alert");
-    const patientRecord = input.value.trim();
+    const patientRecord = patientRecordInput.value.trim();
+    const startDate = startDateInput.value;
+    const endDate = endDateInput.value;
 
     hideAlert(alertBox);
 
     if (!patientRecord) {
       showAlert(alertBox, "Informe o registro do paciente.");
-      input.focus();
+      patientRecordInput.focus();
+      return;
+    }
+
+    if (!startDate) {
+      showAlert(alertBox, "Informe a data inicial.");
+      startDateInput.focus();
+      return;
+    }
+
+    if (!endDate) {
+      showAlert(alertBox, "Informe a data final.");
+      endDateInput.focus();
       return;
     }
 
@@ -35,7 +90,11 @@ function setupWorkForm() {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ patient_record: patientRecord }),
+        body: JSON.stringify({
+          patient_record: patientRecord,
+          start_date: startDate,
+          end_date: endDate,
+        }),
       });
 
       const payload = await response.json();
@@ -93,6 +152,7 @@ async function pollWorkStatus(workId) {
     }
 
     const work = payload.work;
+    renderWorkMetadata(work);
 
     if (work.status === "running") {
       renderRunning(work);
@@ -112,6 +172,25 @@ async function pollWorkStatus(workId) {
       error: error.message || "Erro inesperado.",
     });
     return true;
+  }
+}
+
+function renderWorkMetadata(work) {
+  const patientRecordElement = document.getElementById("meta-patient-record");
+  const periodElement = document.getElementById("meta-period");
+  const patientSummaryElement = document.getElementById("meta-patient-summary");
+
+  if (patientRecordElement) {
+    patientRecordElement.textContent = work.patient_record || "-";
+  }
+
+  if (periodElement) {
+    periodElement.textContent = formatPeriod(work.start_date, work.end_date);
+  }
+
+  if (patientSummaryElement) {
+    patientSummaryElement.textContent =
+      work.patient_summary || "Aguardando captura do resumo do paciente...";
   }
 }
 
@@ -136,6 +215,7 @@ function renderRunning(work) {
     copyButton.dataset.summary = "";
   }
 
+  statusProgress.classList.add("progress-bar-animated", "progress-bar-striped");
   statusMessage.textContent = work.message || "Processando...";
   statusPhase.textContent = phaseLabel(work.phase);
   statusProgress.style.width = `${phaseProgress(work.phase)}%`;
@@ -181,6 +261,10 @@ function renderError(work) {
   const errorAlert = document.getElementById("error-alert");
   const copyButton = document.getElementById("copy-summary-button");
 
+  if (work && work.patient_record) {
+    renderWorkMetadata(work);
+  }
+
   statusCard.classList.add("d-none");
   resultContent.classList.add("d-none");
   spinner.classList.add("d-none");
@@ -196,37 +280,11 @@ function renderError(work) {
 }
 
 function phaseLabel(phase) {
-  switch (phase) {
-    case "starting":
-      return "Preparando";
-    case "capturing":
-      return "Capturando evoluções";
-    case "summarizing":
-      return "Gerando resumo";
-    case "completed":
-      return "Concluído";
-    case "error":
-      return "Erro";
-    default:
-      return "Processando";
-  }
+  return PHASE_CONFIG[phase]?.label || "Processando";
 }
 
 function phaseProgress(phase) {
-  switch (phase) {
-    case "starting":
-      return 15;
-    case "capturing":
-      return 45;
-    case "summarizing":
-      return 80;
-    case "completed":
-      return 100;
-    case "error":
-      return 100;
-    default:
-      return 20;
-  }
+  return PHASE_CONFIG[phase]?.progress || 12;
 }
 
 function setupCopySummaryButton() {
@@ -307,4 +365,35 @@ function showAlert(element, message) {
 function hideAlert(element) {
   element.textContent = "";
   element.classList.add("d-none");
+}
+
+function formatDateForInput(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function formatPeriod(startDate, endDate) {
+  const start = formatIsoDateForDisplay(startDate);
+  const end = formatIsoDateForDisplay(endDate);
+
+  if (!start && !end) {
+    return "-";
+  }
+
+  if (start && end) {
+    return `${start} a ${end}`;
+  }
+
+  return start || end;
+}
+
+function formatIsoDateForDisplay(value) {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return value || "";
+  }
+
+  const [year, month, day] = value.split("-");
+  return `${day}/${month}/${year}`;
 }

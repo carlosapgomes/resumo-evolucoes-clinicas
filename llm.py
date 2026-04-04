@@ -41,7 +41,7 @@ def generate_summary(raw_text: str, patient_record: str | None = None) -> str:
 
     user_message_parts.extend(
         [
-            "Texto bruto capturado do AGHUse:",
+            "Texto das evoluções capturado do AGHUse, já limpo e ordenado cronologicamente:",
             raw_text,
         ]
     )
