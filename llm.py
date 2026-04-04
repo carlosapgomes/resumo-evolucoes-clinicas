@@ -25,7 +25,7 @@ def load_summary_prompt() -> str:
     return prompt
 
 
-def generate_summary(raw_text: str, patient_record: str | None = None) -> str:
+def generate_summary(raw_text: str) -> str:
     if not raw_text.strip():
         raise RuntimeError("Não é possível gerar resumo com texto vazio.")
 

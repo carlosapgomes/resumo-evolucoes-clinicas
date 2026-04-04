@@ -171,7 +171,7 @@ def run_work(
             patient_summary=patient_summary,
             raw_text=raw_text,
         )
-        summary = generate_summary(raw_text, patient_record=patient_record)
+        summary = generate_summary(raw_text)
     except SummaryTimeoutError as error:
         print(f"Timeout na etapa de resumo para o work {work_id}:")
         print(traceback.format_exc())
