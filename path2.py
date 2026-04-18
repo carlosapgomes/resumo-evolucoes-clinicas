@@ -54,7 +54,7 @@ EVOLUTION_END_LINE_RE: Final[re.Pattern[str]] = re.compile(
     re.IGNORECASE,
 )
 SIGNATURE_AUTHOR_RE: Final[re.Pattern[str]] = re.compile(
-    r'\bpor[:\s]+(.+?)\s*(?:,|-)?\s*(?:Crm|Coren|Crefito)\b',
+    r'\bpor[:\s]+(.+?)\s*(?:,|-)?\s*(?:Crm|Coren|Crefito|Crefono|Crn\d*|Cro(?:-?[A-Z]{2})?)\b',
     re.IGNORECASE,
 )
 SIGNATURE_DATETIME_RE: Final[re.Pattern[str]] = re.compile(
@@ -433,17 +433,25 @@ def find_signature_line(evolution_lines: list[str]) -> str | None:
     return None
 
 
-def classify_evolution_type(signature_line: str | None) -> str:
-    if not signature_line:
-        return "other"
+def classify_evolution_type(signature_line: str | None, content: str) -> str:
+    signature_lowered = (signature_line or "").casefold()
+    content_lowered = content.casefold()
 
-    lowered = signature_line.casefold()
-    if "crm" in lowered:
+    if "crm" in signature_lowered:
         return "medical"
-    if "coren" in lowered:
+    if "coren" in signature_lowered:
         return "nursing"
-    if "crefito" in lowered:
+    if "crefito" in signature_lowered:
         return "phisiotherapy"
+    if "crn" in signature_lowered:
+        return "nutrition"
+    if "crefono" in signature_lowered:
+        return "speech_therapy"
+    if "cro" in signature_lowered:
+        return "dentistry"
+
+    if "odontologia" in content_lowered or "odontolog" in content_lowered:
+        return "dentistry"
 
     return "other"
 
@@ -491,7 +499,12 @@ def extract_signature_datetime(signature_line: str | None) -> str:
 
 
 def extract_confidence(evolution_type: str) -> str:
-    return "high" if evolution_type in {"medical", "nursing", "phisiotherapy"} else "low"
+    return (
+        "high"
+        if evolution_type
+        in {"medical", "nursing", "phisiotherapy", "nutrition", "speech_therapy", "dentistry"}
+        else "low"
+    )
 
 
 def build_evolutions_json_payload(evolutions: list[list[str]]) -> list[dict[str, object]]:
@@ -502,9 +515,9 @@ def build_evolutions_json_payload(evolutions: list[list[str]]) -> list[dict[str,
         created_at = extract_initial_datetime(evolution).isoformat()
         signed_at = extract_signature_datetime(signature_line)
         created_by = extract_created_by(signature_line)
-        evolution_type = classify_evolution_type(signature_line)
-        confidence = extract_confidence(evolution_type)
         content = build_evolution_content(evolution, signature_line)
+        evolution_type = classify_evolution_type(signature_line, content)
+        confidence = extract_confidence(evolution_type)
 
         payload.append(
             {

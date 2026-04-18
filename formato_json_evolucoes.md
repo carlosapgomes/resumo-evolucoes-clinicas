@@ -50,10 +50,13 @@ O JSON é um **array de objetos** (não há objeto wrapper no topo).
 - Exemplo: `"Enf. Fulana de Tal"`.
 
 ### `type` (string, obrigatório)
-- Classificação por conselho identificado na assinatura:
+- Classificação por conselho/indícios na assinatura e conteúdo:
   - `medical` → encontrou `Crm`
   - `nursing` → encontrou `Coren`
   - `phisiotherapy` → encontrou `Crefito`
+  - `nutrition` → encontrou `Crn` / `Crn5` etc.
+  - `speech_therapy` → encontrou `Crefono`
+  - `dentistry` → encontrou `Cro` na assinatura **ou** indício textual de odontologia no conteúdo
   - `other` → não encontrou padrão reconhecido
 
 > Observação: o valor `phisiotherapy` está escrito assim no gerador atual e deve ser tratado como valor canônico para compatibilidade.
@@ -64,7 +67,7 @@ O JSON é um **array de objetos** (não há objeto wrapper no topo).
 
 ### `confidence` (string, obrigatório)
 - Confiança da classificação `type`:
-  - `high` para `medical`, `nursing`, `phisiotherapy`
+  - `high` para `medical`, `nursing`, `phisiotherapy`, `nutrition`, `speech_therapy`, `dentistry`
   - `low` para `other`
 
 ### `signatureLine` (string, obrigatório)
@@ -91,7 +94,7 @@ Campos mínimos:
 - `created_at` (timestamp)
 - `signed_at` (timestamp)
 - `created_by` (text)
-- `evolution_type` (text)  -- `medical|nursing|phisiotherapy|other`
+- `evolution_type` (text)  -- `medical|nursing|phisiotherapy|nutrition|speech_therapy|dentistry|other`
 - `confidence` (text)      -- `high|low`
 - `content` (text)
 - `signature_line` (text)
@@ -112,6 +115,7 @@ Campos mínimos:
 2. Validar presença de todos os campos obrigatórios.
 3. Validar formatos de data/hora (`createdAt`, `signedAt`).
 4. Tratar `type` fora da lista conhecida como `other`.
+   - Lista conhecida atual: `medical`, `nursing`, `phisiotherapy`, `nutrition`, `speech_therapy`, `dentistry`, `other`.
 5. Preservar `sourceIndex` para auditoria/replay.
 6. Registrar arquivo de origem e data de ingestão.
 7. Implementar upsert por `(source_file, source_index)`.
