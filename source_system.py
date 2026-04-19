@@ -67,56 +67,217 @@ def esperar_locator_com_retry(
     raise ultimo_erro
 
 
-def fechar_dialogos_iniciais(page: Page) -> None:
-    botao_fechar = page.get_by_role("button", name="Fechar")
-
-    try:
-        expect(botao_fechar).to_be_visible(timeout=5000)
-        botao_fechar.click()
-        page.wait_for_timeout(1000)
-    except Exception:
-        pass
-
-    pendencias_modal = page.locator("#central_pendencias")
-
-    try:
-        expect(pendencias_modal).to_be_visible(timeout=5000)
-        page.wait_for_timeout(1500)
-        page.locator("body").press("Escape")
-        page.wait_for_timeout(1000)
-    except Exception:
-        pass
-
-    page.evaluate(
+def _snapshot_visible_dialogs(page: Page) -> dict[str, object]:
+    return page.evaluate(
         """() => {
-        const seletores = [
+        const dialogSelectors = [
+            '.ui-dialog',
             '#central_pendencias',
             '#msgDocsDialog',
+            '#msgCascaDialog',
+            '[role="dialog"]'
+        ];
+
+        const unique = Array.from(
+            new Set(dialogSelectors.flatMap((selector) => Array.from(document.querySelectorAll(selector))))
+        );
+
+        const isVisible = (element) => {
+            if (!element) return false;
+            const style = window.getComputedStyle(element);
+            const rect = element.getBoundingClientRect();
+            const ariaHidden = (element.getAttribute('aria-hidden') || '').toLowerCase() === 'true';
+            const hiddenByStyle =
+                style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0';
+
+            return !ariaHidden && !hiddenByStyle && rect.width > 0 && rect.height > 0;
+        };
+
+        const parseZIndex = (element) => {
+            const raw = window.getComputedStyle(element).zIndex || '0';
+            const parsed = Number.parseInt(raw, 10);
+            return Number.isFinite(parsed) ? parsed : 0;
+        };
+
+        const visibleDialogs = unique
+            .filter(isVisible)
+            .map((element) => {
+                const title =
+                    element.querySelector('.ui-dialog-title, .modal-title, h1, h2, h3')?.textContent || '';
+
+                return {
+                    id: element.id || null,
+                    title: title.trim() || null,
+                    zIndex: parseZIndex(element),
+                    textSample: (element.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 120),
+                };
+            })
+            .sort((a, b) => b.zIndex - a.zIndex);
+
+        const visibleOverlays = Array.from(document.querySelectorAll('.ui-widget-overlay')).filter(isVisible);
+
+        return {
+            visibleCount: visibleDialogs.length,
+            overlayCount: visibleOverlays.length,
+            visibleDialogs,
+        };
+    }"""
+    )
+
+
+def _close_top_dialog(page: Page) -> dict[str, object]:
+    return page.evaluate(
+        """() => {
+        const dialogSelectors = [
+            '.ui-dialog',
+            '#central_pendencias',
+            '#msgDocsDialog',
+            '#msgCascaDialog',
+            '[role="dialog"]'
+        ];
+
+        const unique = Array.from(
+            new Set(dialogSelectors.flatMap((selector) => Array.from(document.querySelectorAll(selector))))
+        );
+
+        const isVisible = (element) => {
+            if (!element) return false;
+            const style = window.getComputedStyle(element);
+            const rect = element.getBoundingClientRect();
+            const ariaHidden = (element.getAttribute('aria-hidden') || '').toLowerCase() === 'true';
+            const hiddenByStyle =
+                style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0';
+
+            return !ariaHidden && !hiddenByStyle && rect.width > 0 && rect.height > 0;
+        };
+
+        const parseZIndex = (element) => {
+            const raw = window.getComputedStyle(element).zIndex || '0';
+            const parsed = Number.parseInt(raw, 10);
+            return Number.isFinite(parsed) ? parsed : 0;
+        };
+
+        const visibleDialogs = unique.filter(isVisible).sort((a, b) => parseZIndex(b) - parseZIndex(a));
+        if (!visibleDialogs.length) {
+            return {
+                handled: false,
+                reason: 'no-visible-dialogs',
+                remainingVisible: 0,
+            };
+        }
+
+        const top = visibleDialogs[0];
+        const closeButton = top.querySelector(
+            '.ui-dialog-titlebar-close, .ui-dialog-titlebar-icon, button[title*="Fechar"], button[aria-label*="Close"], .close'
+        );
+
+        let action = 'none';
+        if (closeButton) {
+            closeButton.click();
+            action = 'close-button';
+        } else {
+            top.setAttribute('aria-hidden', 'true');
+            top.style.display = 'none';
+            top.style.visibility = 'hidden';
+            top.style.opacity = '0';
+            top.style.pointerEvents = 'none';
+            action = 'force-hide-top';
+        }
+
+        const remainingVisible = unique.filter(isVisible).length;
+
+        const title =
+            top.querySelector('.ui-dialog-title, .modal-title, h1, h2, h3')?.textContent?.trim() || null;
+
+        return {
+            handled: true,
+            action,
+            topDialog: {
+                id: top.id || null,
+                title,
+                zIndex: parseZIndex(top),
+                textSample: (top.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 120),
+            },
+            remainingVisible,
+        };
+    }"""
+    )
+
+
+def _force_hide_dialogs_and_overlays(page: Page) -> dict[str, object]:
+    return page.evaluate(
+        """() => {
+        const selectors = [
+            '#central_pendencias',
+            '#msgDocsDialog',
+            '#msgCascaDialog',
             '.ui-dialog[aria-hidden="false"]',
             '.ui-widget-overlay'
         ];
 
-        for (const seletor of seletores) {
-            document.querySelectorAll(seletor).forEach((elemento) => {
-                elemento.setAttribute('aria-hidden', 'true');
-                elemento.style.display = 'none';
-                elemento.style.visibility = 'hidden';
-                elemento.style.opacity = '0';
-                elemento.style.pointerEvents = 'none';
+        let hiddenCount = 0;
+        for (const selector of selectors) {
+            document.querySelectorAll(selector).forEach((element) => {
+                element.setAttribute('aria-hidden', 'true');
+                element.style.display = 'none';
+                element.style.visibility = 'hidden';
+                element.style.opacity = '0';
+                element.style.pointerEvents = 'none';
+                hiddenCount += 1;
             });
         }
+
+        return { hiddenCount };
     }"""
     )
 
-    try:
-        expect(page.locator("#central_pendencias")).to_be_hidden(timeout=5000)
-    except Exception:
-        pass
 
-    try:
-        expect(page.locator("#msgDocsDialog")).to_be_hidden(timeout=5000)
-    except Exception:
-        pass
+def fechar_dialogos_iniciais(page: Page) -> None:
+    max_ciclos = 12
+    pausas_ms = 700
+    ciclos_estaveis_necessarios = 2
+    ciclos_estaveis = 0
+
+    for ciclo in range(1, max_ciclos + 1):
+        snapshot = _snapshot_visible_dialogs(page)
+        visible_count = int(snapshot.get("visibleCount") or 0)
+        overlay_count = int(snapshot.get("overlayCount") or 0)
+
+        if visible_count == 0 and overlay_count == 0:
+            ciclos_estaveis += 1
+            if ciclos_estaveis >= ciclos_estaveis_necessarios:
+                return
+
+            page.wait_for_timeout(pausas_ms)
+            continue
+
+        ciclos_estaveis = 0
+
+        close_result = _close_top_dialog(page)
+        if close_result.get("handled"):
+            top_dialog = close_result.get("topDialog") or {}
+            dialog_id = top_dialog.get("id") or "(sem id)"
+            dialog_title = top_dialog.get("title") or "(sem título)"
+            action = close_result.get("action") or "desconhecida"
+            remaining = close_result.get("remainingVisible")
+            print(
+                f"Diálogo inicial fechado [{action}]: id={dialog_id} | título={dialog_title} | restantes={remaining}"
+            )
+        else:
+            try:
+                page.locator("body").press("Escape")
+                print("Aviso: não foi possível fechar via botão; aplicado Escape no body.")
+            except Exception:
+                pass
+
+        page.wait_for_timeout(pausas_ms)
+
+    force_result = _force_hide_dialogs_and_overlays(page)
+    hidden_count = force_result.get("hiddenCount")
+    print(
+        "Aviso: limite de varredura de diálogos iniciais atingido. "
+        f"Elementos ocultados via fallback final: {hidden_count}."
+    )
 
 
 def capturar_resumo_paciente(frame, page: Page) -> tuple[str, str | None]:
