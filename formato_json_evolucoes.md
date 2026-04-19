@@ -21,7 +21,15 @@ O JSON é um **array de objetos** (não há objeto wrapper no topo).
     "type": "medical",
     "sourceIndex": 1,
     "confidence": "high",
-    "signatureLine": "Elaborado e assinado por Dr. Exemplo, Crm 12345 em 05/06/2024 23:29"
+    "signatureLine": "Elaborado e assinado por Dr. Exemplo, Crm 12345 em 05/06/2024 23:29",
+    "admissionKey": "br.gov.mec.aghu.paciente.prontuarioonline.vo.InternacaoVO@abcd1234",
+    "admissionRowIndex": 1,
+    "admissionStart": "2024-04-22",
+    "admissionEnd": "2024-05-07",
+    "chunkStart": "2024-04-22",
+    "chunkEnd": "2024-05-06",
+    "requestedStart": "2024-04-20",
+    "requestedEnd": "2024-05-10"
   }
 ]
 ```
@@ -74,14 +82,35 @@ O JSON é um **array de objetos** (não há objeto wrapper no topo).
 - Linha de fechamento da evolução usada como marcador final.
 - Padrão esperado: começa com `Elaborado...` e termina em `em DD/MM/YYYY HH:MM` (ou `HH:MM:SS`).
 
+### `admissionKey` (string, obrigatório)
+- Identificador da linha de internação na tabela (`data-rk`).
+- Útil para rastreabilidade e deduplicação entre chunks.
+
+### `admissionRowIndex` (integer, obrigatório)
+- Índice de linha da internação na tabela (`data-ri`) no momento da coleta.
+
+### `admissionStart` / `admissionEnd` (string ISO date, obrigatório)
+- Período da internação de origem (`YYYY-MM-DD`).
+- `admissionEnd` pode ser `null` quando não há alta (internação atual).
+
+### `chunkStart` / `chunkEnd` (string ISO date, obrigatório)
+- Janela efetiva de extração do chunk de onde a evolução veio.
+- A coleta usa chunks de até 15 dias, com sobreposição de 1 dia.
+
+### `requestedStart` / `requestedEnd` (string ISO date, obrigatório)
+- Intervalo original solicitado pelo usuário para o processamento consolidado.
+
 ---
 
-## 3) Regras de segmentação usadas na extração
+## 3) Regras de segmentação e coleta usadas na extração
 
 1. A evolução inicia em uma linha de data/hora (`DD/MM/YYYY HH:MM`).
 2. A evolução termina na linha `signatureLine` (padrão `Elaborado ... em ...`).
 3. A próxima linha de data/hora abre a próxima evolução.
 4. Datas repetidas no meio de texto (por quebra de página) não abrem nova evolução.
+5. A seleção de internações é automática: inclui toda internação com interseção no intervalo solicitado.
+6. O intervalo é fragmentado em chunks de até 15 dias com sobreposição de 1 dia.
+7. Há deduplicação no consolidado por chave lógica: `admissionKey + createdAt + signatureLine`.
 
 ---
 
@@ -99,13 +128,23 @@ Campos mínimos:
 - `content` (text)
 - `signature_line` (text)
 - `source_index` (int)
+- `admission_key` (text)
+- `admission_row_index` (int)
+- `admission_start` (date)
+- `admission_end` (date null)
+- `chunk_start` (date)
+- `chunk_end` (date)
+- `requested_start` (date)
+- `requested_end` (date)
 - `source_file` (text)     -- nome/identificador do JSON de origem
 - `ingested_at` (timestamp)
 
 Índices recomendados:
 - `(created_at)`
 - `(evolution_type, created_at)`
-- `(source_file, source_index)` com unicidade para evitar duplicação
+- `(admission_key, created_at)`
+- `(source_file, source_index)`
+- unicidade lógica para dedupe: `(source_file, admission_key, created_at, signature_line)`
 
 ---
 
@@ -118,7 +157,7 @@ Campos mínimos:
    - Lista conhecida atual: `medical`, `nursing`, `phisiotherapy`, `nutrition`, `speech_therapy`, `dentistry`, `other`.
 5. Preservar `sourceIndex` para auditoria/replay.
 6. Registrar arquivo de origem e data de ingestão.
-7. Implementar upsert por `(source_file, source_index)`.
+7. Implementar upsert por chave lógica de dedupe (ex.: `source_file + admission_key + created_at + signature_line`).
 
 ---
 
@@ -142,6 +181,14 @@ Para não quebrar consumidores existentes:
   "type": "nursing",
   "sourceIndex": 4,
   "confidence": "high",
-  "signatureLine": "Elaborado e assinado por Enf. Ana Carla Moura Macedo Santana, Coren 265780 em 06/06/2024 04:26"
+  "signatureLine": "Elaborado e assinado por Enf. Ana Carla Moura Macedo Santana, Coren 265780 em 06/06/2024 04:26",
+  "admissionKey": "br.gov.mec.aghu.paciente.prontuarioonline.vo.InternacaoVO@1234abcd",
+  "admissionRowIndex": 1,
+  "admissionStart": "2024-04-22",
+  "admissionEnd": "2024-05-07",
+  "chunkStart": "2024-04-22",
+  "chunkEnd": "2024-04-30",
+  "requestedStart": "2024-04-20",
+  "requestedEnd": "2024-05-10"
 }
 ```

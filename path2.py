@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -12,7 +13,7 @@ import html
 from dotenv import load_dotenv
 from playwright.sync_api import BrowserContext, Locator, Page, Frame, sync_playwright
 
-from datetime import datetime
+from datetime import date, datetime, timedelta
 
 from processa_evolucoes_txt import remove_page_artifacts
 from source_system import (
@@ -37,9 +38,11 @@ DEFAULT_PROCESSED_TXT_OUTPUT_PATH: Final[Path] = Path("downloads/path2-evolucoes
 DEFAULT_SORTED_TXT_OUTPUT_PATH: Final[Path] = Path("downloads/path2-evolucoes-intervalo-ordenado.txt")
 DEFAULT_JSON_OUTPUT_PATH: Final[Path] = Path("downloads/path2-evolucoes-intervalo.json")
 FRAME_NAME: Final[str] = "frame_pol"
-REPORT_WAIT_TIMEOUT_MS: Final[int] = 600000
+REPORT_WAIT_TIMEOUT_MS: Final[int] = 180000
 REPORT_POLL_INTERVAL_MS: Final[int] = 5000
 REPORT_DOWNLOAD_TIMEOUT_MS: Final[int] = 600000
+MAX_CHUNK_DAYS: Final[int] = 15
+CHUNK_OVERLAP_DAYS: Final[int] = 1
 PAGE_HEADER_BLOCK_RE: Final[re.Pattern[str]] = re.compile(
     r'(?ms)^(===== PÁGINA \d+ =====)\nEVOLUÇÃO\n(/\s*\d+)\n(\d+)\n'
 )
@@ -80,7 +83,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--patient-record", default=DEFAULT_PATIENT_RECORD)
     parser.add_argument("--start-date", default=DEFAULT_START_DATE)
     parser.add_argument("--end-date", default=DEFAULT_END_DATE)
-    parser.add_argument("--internacao-index", type=int, default=0)
+    parser.add_argument(
+        "--internacao-index",
+        type=int,
+        default=-1,
+        help=(
+            "Índice manual da internação para depuração. "
+            "Use -1 (padrão) para seleção automática por interseção de datas."
+        ),
+    )
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT_PATH)
     parser.add_argument("--debug-output", type=Path, default=DEFAULT_DEBUG_PATH)
     parser.add_argument("--txt-output", type=Path, default=DEFAULT_TXT_OUTPUT_PATH)
@@ -144,6 +155,46 @@ def normalize_patient_record(value: str) -> str:
     return digits_only or value.strip()
 
 
+def parse_cli_date(value: str) -> date:
+    candidate = value.strip()
+    for fmt in ("%d/%m/%Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(candidate, fmt).date()
+        except ValueError:
+            continue
+
+    raise RuntimeError(
+        f"Data inválida: {value!r}. Use DD/MM/YYYY ou YYYY-MM-DD."
+    )
+
+
+def parse_br_date(value: str | None) -> date | None:
+    if value is None:
+        return None
+
+    stripped = value.strip()
+    if not stripped:
+        return None
+
+    try:
+        return datetime.strptime(stripped, "%d/%m/%Y").date()
+    except ValueError:
+        return None
+
+
+def format_br_date(value: date) -> str:
+    return value.strftime("%d/%m/%Y")
+
+
+def format_iso_date(value: date | None) -> str | None:
+    return value.isoformat() if value else None
+
+
+def normalize_signature_key(value: str) -> str:
+    collapsed = re.sub(r"\s+", " ", (value or "").strip().casefold())
+    return collapsed
+
+
 def open_pol_menu(page: Page) -> bool:
     locator = page.locator("#polMenu")
     if not wait_visible(locator, timeout=5000):
@@ -196,6 +247,233 @@ def ensure_search_screen(page: Page) -> None:
                 return
 
     raise RuntimeError("A tela de pesquisa não ficou disponível após as tentativas de navegação.")
+
+
+def wait_internacoes_table(page: Page, timeout: int = 120000) -> Frame:
+    frame = page.frame(name=FRAME_NAME)
+    if frame is None:
+        raise RuntimeError(f"Iframe {FRAME_NAME} não encontrado.")
+
+    rows_locator = frame.locator('#tabelaInternacoes\\:resultList_data > tr')
+    rows_locator.first.wait_for(state='visible', timeout=timeout)
+    return frame
+
+
+def read_internacoes_rows(page: Page) -> list[dict[str, object]]:
+    frame = wait_internacoes_table(page)
+    rows = frame.eval_on_selector_all(
+        '#tabelaInternacoes\\:resultList_data > tr',
+        """
+        (rows) => rows.map((tr) => ({
+            dataRi: tr.getAttribute('data-ri'),
+            dataRk: tr.getAttribute('data-rk'),
+            cells: Array.from(tr.querySelectorAll('td')).map((td) => (td.textContent || '').trim()),
+            hasDetailsLink: !!tr.querySelector('a[title="Detalhes da Internação"]'),
+        }))
+        """,
+    )
+
+    parsed: list[dict[str, object]] = []
+    for row in rows:
+        if not row.get("hasDetailsLink"):
+            continue
+
+        cells = row.get("cells") or []
+        if len(cells) < 2:
+            continue
+
+        admission_start = parse_br_date(cells[0])
+        if admission_start is None:
+            continue
+
+        admission_end = parse_br_date(cells[1])
+
+        row_index_raw = row.get("dataRi")
+        try:
+            row_index = int(row_index_raw)
+        except (TypeError, ValueError):
+            row_index = len(parsed)
+
+        parsed.append(
+            {
+                "rowIndex": row_index,
+                "admissionKey": row.get("dataRk") or f"row-{row_index}",
+                "admissionStart": admission_start,
+                "admissionEnd": admission_end,
+                "cells": cells,
+            }
+        )
+
+    if not parsed:
+        raise RuntimeError(
+            "Nenhuma internação válida foi encontrada na tabela #tabelaInternacoes:resultList."
+        )
+
+    parsed.sort(key=lambda item: (item["admissionStart"], item["rowIndex"]))
+    return parsed
+
+
+def admission_overlaps_interval(
+    admission: dict[str, object],
+    requested_start: date,
+    requested_end: date,
+) -> bool:
+    admission_start = admission["admissionStart"]
+    admission_end = admission["admissionEnd"] or date.today()
+    return admission_start <= requested_end and admission_end >= requested_start
+
+
+def choose_target_admissions(
+    admissions: list[dict[str, object]],
+    requested_start: date,
+    requested_end: date,
+    internacao_index: int,
+) -> list[dict[str, object]]:
+    if internacao_index >= 0:
+        if internacao_index >= len(admissions):
+            raise RuntimeError(
+                f"Índice manual de internação inválido: {internacao_index}. "
+                f"Faixa disponível: 0 a {len(admissions) - 1}."
+            )
+        selected = admissions[internacao_index]
+        print(
+            "Modo manual ativado: usando apenas a internação "
+            f"index={internacao_index} key={selected['admissionKey']}"
+        )
+        return [selected]
+
+    selected = [
+        admission
+        for admission in admissions
+        if admission_overlaps_interval(admission, requested_start, requested_end)
+    ]
+
+    if not selected:
+        raise RuntimeError(
+            "Nenhuma internação com interseção foi encontrada para o intervalo solicitado."
+        )
+
+    print(f"Internações selecionadas automaticamente: {len(selected)}")
+    for admission in selected:
+        print(
+            " - key={key} | início={start} | alta={end}".format(
+                key=admission["admissionKey"],
+                start=admission["admissionStart"],
+                end=admission["admissionEnd"] or "(sem alta)",
+            )
+        )
+
+    return selected
+
+
+def build_chunks_for_interval(start: date, end: date) -> list[tuple[date, date]]:
+    if end < start:
+        return []
+
+    chunks: list[tuple[date, date]] = []
+    cursor = start
+
+    while cursor <= end:
+        chunk_end = min(cursor + timedelta(days=MAX_CHUNK_DAYS - 1), end)
+        chunks.append((cursor, chunk_end))
+
+        if chunk_end >= end:
+            break
+
+        next_cursor = chunk_end - timedelta(days=CHUNK_OVERLAP_DAYS - 1)
+        if next_cursor <= cursor:
+            next_cursor = cursor + timedelta(days=1)
+
+        cursor = next_cursor
+
+    return chunks
+
+
+def click_menu_internacoes(page: Page) -> None:
+    menu_label = page.locator('.ui-treenode-label', has_text='Internações').first
+    if not wait_visible(menu_label, timeout=30000):
+        raise RuntimeError("Menu lateral 'Internações' não encontrado na página principal.")
+
+    if not click_with_fallback(menu_label, "menu lateral Internações", timeout=15000):
+        raise RuntimeError("Falha ao acionar o menu lateral Internações.")
+
+    elapsed = 0
+    while elapsed < REPORT_WAIT_TIMEOUT_MS:
+        frame = page.frame(name=FRAME_NAME)
+        if frame and 'consultarInternacoes.xhtml' in (frame.url or ''):
+            if frame.locator('#tabelaInternacoes\\:resultList_data > tr').count() > 0:
+                print('OK: lista de internações reaberta com sucesso.')
+                return
+
+        page.wait_for_timeout(REPORT_POLL_INTERVAL_MS)
+        elapsed += REPORT_POLL_INTERVAL_MS
+
+    raise RuntimeError("Não foi possível retornar à listagem de internações pelo menu lateral.")
+
+
+def open_internacao_detail(page: Page, admission: dict[str, object]) -> None:
+    frame = wait_internacoes_table(page)
+    admission_key = admission["admissionKey"]
+
+    row_locator = frame.locator(
+        f'#tabelaInternacoes\\:resultList_data > tr[data-rk="{admission_key}"]'
+    )
+
+    if row_locator.count() == 0:
+        row_index = admission["rowIndex"]
+        row_locator = frame.locator(
+            f'#tabelaInternacoes\\:resultList_data > tr[data-ri="{row_index}"]'
+        )
+
+    if row_locator.count() == 0:
+        raise RuntimeError(
+            f"Não foi possível localizar a internação na tabela. key={admission_key}"
+        )
+
+    details_link = row_locator.first.locator('a[title="Detalhes da Internação"]').first
+    details_link.wait_for(state='visible', timeout=30000)
+    details_link.click()
+
+    elapsed = 0
+    while elapsed < REPORT_WAIT_TIMEOUT_MS:
+        frame = page.frame(name=FRAME_NAME)
+        if frame and 'consultaDetalheInternacao.xhtml' in (frame.url or ''):
+            if frame.get_by_role('button', name='Evolução').count() > 0:
+                print(f"OK: detalhes da internação abertos. key={admission_key}")
+                return
+
+        page.wait_for_timeout(REPORT_POLL_INTERVAL_MS)
+        elapsed += REPORT_POLL_INTERVAL_MS
+
+    raise RuntimeError(
+        f"A tela de detalhes da internação não carregou no tempo esperado. key={admission_key}"
+    )
+
+
+def go_back_to_detail_from_report(page: Page) -> None:
+    frame = page.frame(name=FRAME_NAME)
+    if frame is None:
+        raise RuntimeError(f"Iframe {FRAME_NAME} não encontrado ao tentar voltar do relatório.")
+
+    voltar_button = frame.get_by_role('button', name='Voltar').first
+    if not wait_visible(voltar_button, timeout=30000):
+        raise RuntimeError("Botão 'Voltar' não encontrado na tela de relatório.")
+
+    if not click_with_fallback(voltar_button, "botão Voltar do relatório", timeout=15000):
+        raise RuntimeError("Falha ao acionar o botão Voltar na tela de relatório.")
+
+    elapsed = 0
+    while elapsed < REPORT_WAIT_TIMEOUT_MS:
+        frame = page.frame(name=FRAME_NAME)
+        if frame and 'consultaDetalheInternacao.xhtml' in (frame.url or ''):
+            if frame.get_by_role('button', name='Evolução').count() > 0:
+                print('OK: retorno à tela de detalhes da internação concluído.')
+                return
+
+        page.wait_for_timeout(REPORT_POLL_INTERVAL_MS)
+        elapsed += REPORT_POLL_INTERVAL_MS
+
+    raise RuntimeError("Não foi possível voltar para a tela de detalhes da internação.")
 
 
 def click_nth(locator: Locator, index: int, description: str) -> None:
@@ -629,6 +907,60 @@ def click_visualizar_relatorio(frame, page: Page) -> None:
     page.wait_for_timeout(1500)
 
 
+def open_report_for_interval(page: Page, chunk_start: date, chunk_end: date) -> Frame | None:
+    frame_locator = page.frame_locator(f'iframe[name="{FRAME_NAME}"]')
+
+    botao_evolucao = frame_locator.get_by_role('button', name='Evolução')
+    botao_evolucao.first.wait_for(state='visible', timeout=30000)
+
+    try:
+        if botao_evolucao.first.is_disabled():
+            print("Aviso: botão Evolução está desabilitado para esta internação/período.")
+            return None
+    except Exception:
+        pass
+
+    if not click_with_fallback(botao_evolucao, 'botão Evolução', timeout=15000):
+        raise RuntimeError("Falha ao acionar o botão Evolução na tela de detalhes.")
+    page.wait_for_timeout(1000)
+
+    wait_for_modal_evolucao(page)
+
+    inicio_text = format_br_date(chunk_start)
+    fim_text = format_br_date(chunk_end)
+
+    print(f"Aplicando intervalo do chunk: {inicio_text} até {fim_text}")
+
+    data_inicio = frame_locator.locator('[id="dataInicio:dataInicio:inputId_input"]')
+    data_inicio.first.wait_for(state='visible', timeout=30000)
+    data_inicio.first.click()
+    data_inicio.first.fill(inicio_text)
+
+    data_fim = frame_locator.locator('[id="dataFim:dataFim:inputId_input"]')
+    data_fim.first.wait_for(state='visible', timeout=30000)
+    data_fim.first.click()
+    data_fim.first.fill(fim_text)
+
+    wait_for_modal_evolucao(page)
+    select_order_crescente(frame_locator, page)
+
+    wait_for_modal_evolucao(page)
+    click_visualizar_relatorio(frame_locator, page)
+
+    try:
+        return wait_for_report_page(page)
+    except RuntimeError as error:
+        frame = page.frame(name=FRAME_NAME)
+        current_url = frame.url if frame else ""
+        if 'consultaDetalheInternacao.xhtml' in (current_url or ''):
+            print(
+                "Aviso: relatório não foi gerado para este chunk. "
+                f"intervalo={inicio_text} até {fim_text}"
+            )
+            return None
+        raise error
+
+
 def wait_for_report_page(page: Page) -> Frame:
     elapsed = 0
 
@@ -641,15 +973,16 @@ def wait_for_report_page(page: Page) -> Frame:
         print(f'Aguardando relatório... {elapsed // 1000}s · frame={frame_url}')
 
         if 'relatorioAnaEvoInternacaoPdf.xhtml' in frame_url:
-            print('OK: tela de relatório detectada pela URL do iframe.')
-            return frame
+            try:
+                has_print_links = frame.locator('#printLinks').count() > 0
+                has_back_button = frame.get_by_role('button', name='Voltar').count() > 0
+            except Exception:
+                has_print_links = False
+                has_back_button = False
 
-        try:
-            if frame.locator('#printLinks').count() > 0:
-                print('OK: tela de relatório detectada pelo form printLinks.')
+            if has_print_links and has_back_button:
+                print('OK: tela de relatório detectada e estabilizada.')
                 return frame
-        except Exception:
-            pass
 
         page.wait_for_timeout(REPORT_POLL_INTERVAL_MS)
         elapsed += REPORT_POLL_INTERVAL_MS
@@ -724,6 +1057,130 @@ def baixar_pdf_via_formulario_relatorio(
     return False
 
 
+def download_pdf_from_report(
+    page: Page,
+    context: BrowserContext,
+    report_frame: Frame,
+    pdf_output_path: Path,
+    debug_output_path: Path,
+) -> None:
+    print(f"Tentando localizar a URL do PDF para salvar em {pdf_output_path}...")
+
+    try:
+        pdf_url = resolve_pdf_url(page)
+        baixar_pdf_autenticado(context, pdf_url, pdf_output_path, debug_output_path)
+        print(f"PDF salvo com sucesso em: {pdf_output_path}")
+        return
+    except Exception as pdf_error:
+        print(
+            'Aviso: extração direta da URL do PDF falhou nesta rota. '
+            'Tentando download pelo formulário interno do relatório...'
+        )
+        print(f'Motivo original: {pdf_error}')
+
+    if not baixar_pdf_via_formulario_relatorio(
+        context,
+        report_frame,
+        pdf_output_path,
+        debug_output_path,
+    ):
+        raise RuntimeError("Não foi possível baixar o PDF do relatório por nenhuma estratégia.")
+
+
+def build_chunk_artifact_path(base_path: Path, admission_idx: int, chunk_idx: int) -> Path:
+    return base_path.with_name(
+        f"{base_path.stem}-adm{admission_idx + 1:02d}-chunk{chunk_idx + 1:02d}{base_path.suffix}"
+    )
+
+
+def enrich_payload_with_metadata(
+    payload: list[dict[str, object]],
+    admission: dict[str, object],
+    chunk_start: date,
+    chunk_end: date,
+    requested_start: date,
+    requested_end: date,
+) -> list[dict[str, object]]:
+    enriched: list[dict[str, object]] = []
+
+    for item in payload:
+        item_copy = dict(item)
+        item_copy["admissionKey"] = admission["admissionKey"]
+        item_copy["admissionRowIndex"] = int(admission["rowIndex"])
+        item_copy["admissionStart"] = format_iso_date(admission["admissionStart"])
+        item_copy["admissionEnd"] = format_iso_date(admission["admissionEnd"])
+        item_copy["chunkStart"] = format_iso_date(chunk_start)
+        item_copy["chunkEnd"] = format_iso_date(chunk_end)
+        item_copy["requestedStart"] = format_iso_date(requested_start)
+        item_copy["requestedEnd"] = format_iso_date(requested_end)
+        enriched.append(item_copy)
+
+    return enriched
+
+
+def dedupe_evolutions(records: list[dict[str, object]]) -> tuple[list[dict[str, object]], int]:
+    deduped: list[dict[str, object]] = []
+    index_by_key: dict[tuple[str, str, str], int] = {}
+
+    for record in records:
+        admission_key = str(record.get("admissionKey") or "")
+        created_at = str(record.get("createdAt") or "")
+        signature_key = normalize_signature_key(str(record.get("signatureLine") or ""))
+
+        if not signature_key:
+            content = str(record.get("content") or "")
+            signature_key = hashlib.sha1(content.encode("utf-8")).hexdigest()
+
+        key = (admission_key, created_at, signature_key)
+
+        if key not in index_by_key:
+            index_by_key[key] = len(deduped)
+            deduped.append(record)
+            continue
+
+        existing_index = index_by_key[key]
+        existing = deduped[existing_index]
+
+        if len(str(record.get("content") or "")) > len(str(existing.get("content") or "")):
+            deduped[existing_index] = record
+
+    removed_count = len(records) - len(deduped)
+    return deduped, removed_count
+
+
+def sort_records_chronologically(records: list[dict[str, object]]) -> list[dict[str, object]]:
+    return sorted(
+        records,
+        key=lambda item: (
+            str(item.get("createdAt") or ""),
+            str(item.get("admissionStart") or ""),
+            int(item.get("admissionRowIndex") or 0),
+            int(item.get("sourceIndex") or 0),
+        ),
+    )
+
+
+def build_text_blocks_from_records(records: list[dict[str, object]]) -> str:
+    blocks: list[str] = []
+
+    for index, record in enumerate(records, start=1):
+        created_at = str(record.get("createdAt") or "")
+        content = str(record.get("content") or "").strip()
+        signature_line = str(record.get("signatureLine") or "").strip()
+
+        body_lines: list[str] = []
+        if created_at:
+            body_lines.append(created_at.replace("T", " "))
+        if content:
+            body_lines.append(content)
+        if signature_line:
+            body_lines.append(signature_line)
+
+        blocks.append(f"===== EVOLUÇÃO {index} =====\n" + "\n".join(body_lines).strip())
+
+    return "\n\n".join(blocks).strip() + "\n" if blocks else ""
+
+
 def run(
     *,
     source_system_url: str,
@@ -743,6 +1200,13 @@ def run(
     headless: bool,
 ) -> None:
     patient_record = normalize_patient_record(patient_record)
+    requested_start = parse_cli_date(start_date)
+    requested_end = parse_cli_date(end_date)
+
+    if requested_end < requested_start:
+        raise RuntimeError(
+            f"Intervalo inválido: início {requested_start} é maior que fim {requested_end}."
+        )
 
     with sync_playwright() as playwright:
         browser = None
@@ -790,68 +1254,181 @@ def run(
             internacoes.click()
             page.wait_for_timeout(1500)
 
-            frame_locator = page.frame_locator(f'iframe[name="{FRAME_NAME}"]')
-            detalhes_internacao = frame_locator.get_by_role("link", name="Detalhes da Internação")
-            detalhes_internacao.first.wait_for(state="visible", timeout=30000)
-            click_nth(detalhes_internacao, internacao_index, "Detalhes da Internação")
-            page.wait_for_timeout(1500)
-
-            botao_evolucao = frame_locator.get_by_role("button", name="Evolução")
-            botao_evolucao.wait_for(state="visible", timeout=30000)
-            botao_evolucao.click()
-            page.wait_for_timeout(1200)
-
-            print(f"Aplicando intervalo {start_date} até {end_date}...")
-            wait_for_modal_evolucao(page)
-
-            data_inicio = frame_locator.locator('[id="dataInicio:dataInicio:inputId_input"]')
-            data_inicio.wait_for(state="visible", timeout=30000)
-            data_inicio.click()
-            data_inicio.fill(start_date)
-
-            data_fim = frame_locator.locator('[id="dataFim:dataFim:inputId_input"]')
-            data_fim.wait_for(state="visible", timeout=30000)
-            data_fim.click()
-            data_fim.fill(end_date)
-
-            wait_for_modal_evolucao(page)
-            select_order_crescente(frame_locator, page)
-
-            print("Solicitando visualização do relatório...")
-            wait_for_modal_evolucao(page)
-            click_visualizar_relatorio(frame_locator, page)
-
-            report_frame = wait_for_report_page(page)
-
-            print("Tentando localizar a URL do PDF...")
-            try:
-                pdf_url = resolve_pdf_url(page)
-                print(f"Baixando PDF autenticado para {output_path}...")
-                baixar_pdf_autenticado(context, pdf_url, output_path, debug_output_path)
-                print(f"PDF salvo com sucesso em: {output_path}")
-            except Exception as pdf_error:
-                print(
-                    'Aviso: extração direta da URL do PDF falhou nesta rota. '
-                    'Tentando download pelo formulário interno do relatório...'
-                )
-                print(f'Motivo original: {pdf_error}')
-
-                if not baixar_pdf_via_formulario_relatorio(
-                    context,
-                    report_frame,
-                    output_path,
-                    debug_output_path,
-                ):
-                    raise
-
-            extrair_e_processar_pdf_pol(
-                output_path,
-                txt_output_path,
-                normalized_txt_output_path,
-                processed_txt_output_path,
-                sorted_txt_output_path,
-                json_output_path,
+            all_admissions = read_internacoes_rows(page)
+            target_admissions = choose_target_admissions(
+                all_admissions,
+                requested_start,
+                requested_end,
+                internacao_index,
             )
+
+            collected_records: list[dict[str, object]] = []
+            merged_raw_text_parts: list[str] = []
+            merged_normalized_text_parts: list[str] = []
+
+            for admission_idx, planned_admission in enumerate(target_admissions):
+                if admission_idx > 0:
+                    click_menu_internacoes(page)
+
+                current_rows = read_internacoes_rows(page)
+                current_admission = next(
+                    (
+                        item
+                        for item in current_rows
+                        if item["admissionKey"] == planned_admission["admissionKey"]
+                    ),
+                    None,
+                )
+
+                if current_admission is None:
+                    current_admission = next(
+                        (
+                            item
+                            for item in current_rows
+                            if item["rowIndex"] == planned_admission["rowIndex"]
+                            and item["admissionStart"] == planned_admission["admissionStart"]
+                            and item["admissionEnd"] == planned_admission["admissionEnd"]
+                        ),
+                        None,
+                    )
+
+                if current_admission is None:
+                    raise RuntimeError(
+                        "Não foi possível reencontrar a internação na tabela ao retomar o fluxo. "
+                        f"key={planned_admission['admissionKey']}"
+                    )
+
+                admission_start = current_admission["admissionStart"]
+                admission_end = current_admission["admissionEnd"] or requested_end
+
+                effective_start = max(requested_start, admission_start)
+                effective_end = min(requested_end, admission_end)
+
+                if effective_end < effective_start:
+                    print(
+                        "Aviso: internação sem interseção efetiva após recorte. "
+                        f"key={current_admission['admissionKey']}"
+                    )
+                    continue
+
+                chunks = build_chunks_for_interval(effective_start, effective_end)
+                print(
+                    f"Internação {admission_idx + 1}/{len(target_admissions)} | "
+                    f"key={current_admission['admissionKey']} | chunks={len(chunks)}"
+                )
+
+                open_internacao_detail(page, current_admission)
+
+                last_chunk_had_report = False
+
+                for chunk_idx, (chunk_start, chunk_end) in enumerate(chunks):
+                    if chunk_idx > 0 and last_chunk_had_report:
+                        go_back_to_detail_from_report(page)
+
+                    report_frame = open_report_for_interval(page, chunk_start, chunk_end)
+                    if report_frame is None:
+                        last_chunk_had_report = False
+                        continue
+
+                    chunk_pdf_path = build_chunk_artifact_path(output_path, admission_idx, chunk_idx)
+                    chunk_debug_path = build_chunk_artifact_path(debug_output_path, admission_idx, chunk_idx)
+                    chunk_txt_path = build_chunk_artifact_path(txt_output_path, admission_idx, chunk_idx)
+                    chunk_norm_path = build_chunk_artifact_path(
+                        normalized_txt_output_path,
+                        admission_idx,
+                        chunk_idx,
+                    )
+                    chunk_processed_path = build_chunk_artifact_path(
+                        processed_txt_output_path,
+                        admission_idx,
+                        chunk_idx,
+                    )
+                    chunk_sorted_path = build_chunk_artifact_path(
+                        sorted_txt_output_path,
+                        admission_idx,
+                        chunk_idx,
+                    )
+                    chunk_json_path = build_chunk_artifact_path(json_output_path, admission_idx, chunk_idx)
+
+                    download_pdf_from_report(
+                        page,
+                        context,
+                        report_frame,
+                        chunk_pdf_path,
+                        chunk_debug_path,
+                    )
+
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                    if chunk_pdf_path.exists():
+                        output_path.write_bytes(chunk_pdf_path.read_bytes())
+
+                    extrair_e_processar_pdf_pol(
+                        chunk_pdf_path,
+                        chunk_txt_path,
+                        chunk_norm_path,
+                        chunk_processed_path,
+                        chunk_sorted_path,
+                        chunk_json_path,
+                    )
+
+                    if chunk_txt_path.exists():
+                        merged_raw_text_parts.append(chunk_txt_path.read_text(encoding="utf-8"))
+                    if chunk_norm_path.exists():
+                        merged_normalized_text_parts.append(chunk_norm_path.read_text(encoding="utf-8"))
+
+                    chunk_payload = json.loads(chunk_json_path.read_text(encoding="utf-8"))
+                    if not isinstance(chunk_payload, list):
+                        raise RuntimeError(
+                            f"Payload inválido no JSON do chunk: {chunk_json_path}"
+                        )
+
+                    enriched_payload = enrich_payload_with_metadata(
+                        chunk_payload,
+                        current_admission,
+                        chunk_start,
+                        chunk_end,
+                        requested_start,
+                        requested_end,
+                    )
+                    collected_records.extend(enriched_payload)
+                    last_chunk_had_report = True
+
+            if not collected_records:
+                raise RuntimeError("Nenhuma evolução foi coletada para o intervalo solicitado.")
+
+            deduped_records, removed_count = dedupe_evolutions(collected_records)
+            sorted_records = sort_records_chronologically(deduped_records)
+
+            salvar_evolucoes_json(sorted_records, json_output_path)
+
+            if merged_raw_text_parts:
+                salvar_texto_extraido(
+                    "\n\n".join(part.strip() for part in merged_raw_text_parts if part.strip()).strip()
+                    + "\n",
+                    txt_output_path,
+                )
+            if merged_normalized_text_parts:
+                salvar_texto_extraido(
+                    "\n\n".join(
+                        part.strip() for part in merged_normalized_text_parts if part.strip()
+                    ).strip()
+                    + "\n",
+                    normalized_txt_output_path,
+                )
+
+            salvar_texto_extraido(
+                build_text_blocks_from_records(deduped_records),
+                processed_txt_output_path,
+            )
+            salvar_texto_extraido(
+                build_text_blocks_from_records(sorted_records),
+                sorted_txt_output_path,
+            )
+
+            print(f"Registros coletados (antes da deduplicação): {len(collected_records)}")
+            print(f"Registros após deduplicação: {len(sorted_records)}")
+            print(f"Duplicados removidos: {removed_count}")
+            print(f"JSON consolidado salvo em: {json_output_path}")
         except Exception:
             if page is not None:
                 salvar_debug(page)
