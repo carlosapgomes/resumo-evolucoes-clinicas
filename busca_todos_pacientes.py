@@ -365,6 +365,7 @@ def click_search_button(frame_locator: FrameLocator) -> bool:
 
 def wait_for_results_table(frame_locator: FrameLocator, timeout: int = 30000) -> bool:
     try:
+        # Aguarda o container da datatable ficar visível
         frame_locator.locator('[id="tabelaCensoDiario:resultList"]').wait_for(
             state="visible", timeout=timeout
         )
@@ -373,10 +374,89 @@ def wait_for_results_table(frame_locator: FrameLocator, timeout: int = 30000) ->
         return False
 
 
+def wait_for_table_rows_ready(page: Page, min_wait_ms: int = 2000) -> int:
+    """
+    Aguarda as linhas da tabela terminarem de carregar (AJAX do PrimeFaces).
+    Polling: espera o número de <tr> estabilizar por 2 ciclos consecutivos.
+    Retorna o número final de linhas.
+    """
+    censo_frame = get_censo_frame(page)
+    if censo_frame is None:
+        return 0
+
+    stable_count = 0
+    prev_count = -1
+    stable_cycles = 0
+    max_cycles = 20
+
+    for _ in range(max_cycles):
+        try:
+            # Também verifica se o paginator já apareceu (indica que a tabela carregou)
+            paginator = censo_frame.locator(".ui-paginator-current")
+            paginator_visible = paginator.count() > 0
+
+            rows = censo_frame.locator('[id="tabelaCensoDiario:resultList_data"] tr')
+            count = rows.count()
+
+            if count == prev_count and count > 0:
+                stable_cycles += 1
+                if stable_cycles >= 2:
+                    if paginator_visible:
+                        try:
+                            pag_text = paginator.inner_text()
+                            print(f"  Paginador: {pag_text}")
+                        except Exception:
+                            pass
+                    return count
+            else:
+                stable_cycles = 0
+
+            prev_count = count
+            page.wait_for_timeout(500)
+        except Exception:
+            page.wait_for_timeout(500)
+
+    # Fallback: retorna o que tiver após min_wait_ms
+    page.wait_for_timeout(min_wait_ms)
+    try:
+        rows = censo_frame.locator('[id="tabelaCensoDiario:resultList_data"] tr')
+        return rows.count()
+    except Exception:
+        return 0
+
+
 def select_100_rows_per_page(page: Page) -> None:
+    """
+    Lê o paginador ("Exibindo: X - Y de Z registros") e só ajusta para 100
+    se o total Z > Y (nem todos os registros estão visíveis).
+    """
     censo_frame = get_censo_frame(page)
     if censo_frame is None:
         return
+
+    try:
+        pag_text = censo_frame.locator(".ui-paginator-current").inner_text()
+        print(f"  Paginador: {pag_text}")
+    except Exception:
+        print("  Aviso: não foi possível ler o paginador.")
+        return
+
+    import re
+    match = re.search(r'(\d+)\s*-\s*(\d+)\s+de\s+(\d+)', pag_text)
+    if not match:
+        print(f"  Aviso: formato do paginador não reconhecido: {pag_text}")
+        return
+
+    first_shown = int(match.group(1))
+    last_shown = int(match.group(2))
+    total = int(match.group(3))
+
+    if last_shown >= total:
+        print(f"  OK: todos os {total} registros já estão visíveis.")
+        return
+
+    # Nem todos visíveis — tenta expandir para 100
+    print(f"  Exibindo {first_shown}-{last_shown} de {total}. Ajustando para 100...")
     try:
         result = censo_frame.evaluate("""
             () => {
@@ -388,10 +468,15 @@ def select_100_rows_per_page(page: Page) -> None:
                 return 'changed-to-100';
             }
         """)
-        if result == "changed-to-100":
-            page.wait_for_timeout(2000)
-    except Exception:
-        pass
+        if result == "already-100":
+            print("  Paginação já estava em 100.")
+        elif result == "changed-to-100":
+            print("  Paginação ajustada para 100, aguardando reload...")
+            wait_for_table_rows_ready(page, min_wait_ms=1000)
+        else:
+            print(f"  Aviso: resultado inesperado: {result}")
+    except Exception as e:
+        print(f"  Aviso: erro ao ajustar paginação: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -678,11 +763,14 @@ def run(
                     print(f"  ERRO: falha no Pesquisar")
                     continue
 
-                page.wait_for_timeout(1500)
-
                 if wait_for_results_table(frame_locator):
-                    page.wait_for_timeout(1500)
+                    # Aguarda todas as linhas da datatable carregarem via AJAX
+                    row_count = wait_for_table_rows_ready(page, min_wait_ms=2000)
+                    if row_count > 0:
+                        print(f"  Linhas detectadas: {row_count}")
+                    # Garante 100 por página (se houver troca, aguarda estabilizar de novo)
                     select_100_rows_per_page(page)
+                    wait_for_table_rows_ready(page, min_wait_ms=1000)
                     patients = extract_patients(page)
                     result = {"setor": sector_name, "pacientes": patients}
                 else:

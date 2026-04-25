@@ -209,37 +209,104 @@ def wait_for_results_table(frame_locator: FrameLocator, timeout: int = 30000) ->
         return False
 
 
-def select_100_rows_per_page(page: Page) -> None:
+def wait_for_table_rows_ready(page: Page, min_wait_ms: int = 2000) -> int:
     """
-    Garante que o paginador esteja configurado para 100 registros por página.
-    O default do sistema já é 100; esta função força via JS por segurança.
+    Aguarda as linhas da tabela terminarem de carregar (AJAX do PrimeFaces).
+    Polling: espera o número de <tr> estabilizar por 2 ciclos consecutivos.
+    Retorna o número final de linhas.
     """
     censo_frame = get_censo_frame(page)
     if censo_frame is None:
-        print("Aviso: frame do Censo não encontrado para ajustar paginação.")
+        return 0
+
+    prev_count = -1
+    stable_cycles = 0
+    max_cycles = 20
+
+    for _ in range(max_cycles):
+        try:
+            rows = censo_frame.locator('[id="tabelaCensoDiario:resultList_data"] tr')
+            count = rows.count()
+
+            if count == prev_count and count > 0:
+                stable_cycles += 1
+                if stable_cycles >= 2:
+                    # Mostra o texto do paginador
+                    paginator = censo_frame.locator(".ui-paginator-current")
+                    if paginator.count() > 0:
+                        try:
+                            print(f"  Paginador: {paginator.inner_text()}")
+                        except Exception:
+                            pass
+                    return count
+            else:
+                stable_cycles = 0
+
+            prev_count = count
+            page.wait_for_timeout(500)
+        except Exception:
+            page.wait_for_timeout(500)
+
+    page.wait_for_timeout(min_wait_ms)
+    try:
+        rows = censo_frame.locator('[id="tabelaCensoDiario:resultList_data"] tr')
+        return rows.count()
+    except Exception:
+        return 0
+
+
+def select_100_rows_per_page(page: Page) -> None:
+    """
+    Lê o paginador ("Exibindo: X - Y de Z registros") e só ajusta para 100
+    se o total Z > Y (nem todos os registros estão visíveis).
+    """
+    censo_frame = get_censo_frame(page)
+    if censo_frame is None:
         return
 
+    try:
+        pag_text = censo_frame.locator(".ui-paginator-current").inner_text()
+        print(f"  Paginador: {pag_text}")
+    except Exception:
+        print("  Aviso: não foi possível ler o paginador.")
+        return
+
+    import re
+    match = re.search(r'(\d+)\s*-\s*(\d+)\s+de\s+(\d+)', pag_text)
+    if not match:
+        print(f"  Aviso: formato do paginador não reconhecido: {pag_text}")
+        return
+
+    first_shown = int(match.group(1))
+    last_shown = int(match.group(2))
+    total = int(match.group(3))
+
+    if last_shown >= total:
+        print(f"  OK: todos os {total} registros já estão visíveis.")
+        return
+
+    # Nem todos visíveis — tenta expandir para 100
+    print(f"  Exibindo {first_shown}-{last_shown} de {total}. Ajustando para 100...")
     try:
         result = censo_frame.evaluate("""
             () => {
                 const sel = document.querySelector('select.ui-paginator-rpp-options');
                 if (!sel) return 'select-not-found';
                 if (sel.value === '100') return 'already-100';
-
                 sel.value = '100';
                 sel.dispatchEvent(new Event('change', { bubbles: true }));
                 return 'changed-to-100';
             }
         """)
         if result == "already-100":
-            print("OK: paginação já está em 100 registros por página.")
+            print("  Paginação já estava em 100.")
         elif result == "changed-to-100":
-            print("OK: paginação ajustada para 100 registros por página.")
-            page.wait_for_timeout(2000)  # Aguarda recarregar a tabela após mudança
+            print("  Paginação ajustada para 100, aguardando reload...")
+            wait_for_table_rows_ready(page, min_wait_ms=1000)
         else:
-            print(f"Aviso: não foi possível verificar paginação ({result}).")
+            print(f"  Aviso: resultado inesperado: {result}")
     except Exception as e:
-        print(f"Aviso: erro ao ajustar paginação: {e}")
+        print(f"  Aviso: erro ao ajustar paginação: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -462,10 +529,12 @@ def run(
                 print("Nenhum resultado retornado para este setor.")
                 patients: list[dict[str, str]] = []
             else:
-                # --- Garante 100 rows por página ---
-                # Pequena pausa para garantir que o AJAX terminou
-                page.wait_for_timeout(1500)
+                # Aguarda todas as linhas carregarem via AJAX
+                row_count = wait_for_table_rows_ready(page, min_wait_ms=2000)
+                print(f"  Linhas detectadas: {row_count}")
+                # Garante 100 rows por página (se houver troca, aguarda estabilizar)
                 select_100_rows_per_page(page)
+                wait_for_table_rows_ready(page, min_wait_ms=1000)
 
                 # --- Extrai pacientes ---
                 patients = extract_patients(page)
